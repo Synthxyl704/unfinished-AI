@@ -188,6 +188,165 @@ auto randomInitialization(double fanInput) -> double {
 
 // -------------------
 
+class CharacterNeuralNetwork {
+    private:
+        // what we want is that our "hello aris" vector of characters should go through vocabSize
+        // it will pass through transformations
+        // exit as a probability distribution over the same vocabulary we train it on
+
+        std::int32_t vocabularySize;
+        std::int32_t embeddingDensity;
+        std::int32_t hiddenDensity;
+
+        DenseMatrix layerOneWeights; // fun-fact: this is called "composition", the instantiation of a class in an extrinsic class
+        std::vector<double> layerOneBias;
+        // embedding --> hidden via (embeddingDensity x hiddenDensity)
+        // matrix multiplication! 
+        // each column in this matrix is one "neuron" in the hidden layer
+
+        DenseMatrix layerTwoWeights;
+        std::vector<double> layerTwoBias;
+        // hidden --> output via (hiddenDensity x vocabSize), MxM!
+        // each column in this matrix is one output character (output neurons)
+
+    public:
+    
+    // allocate main memory (RAM) needed to store connection b/w those 2 layers through list init
+        CharacterNeuralNetwork(std::int32_t vocabSize, std::int32_t embeddingDensitySize, std::int32_t hiddenDensitySize)
+        : vocabularySize(vocabSize), embeddingDensity(embeddingDensitySize), hiddenDensity(hiddenDensitySize),
+          // we will conduct xavier initialization (aka. "glorot initialization") for simplicity
+          // which will set the neural network's weights to random values scaled by the number of input neurons and output neurons
+          layerOneWeights(embeddingDensitySize, hiddenDensitySize),
+          layerOneBias(hiddenDensitySize, static_cast<double>(0.0)),
+          layerTwoWeights(hiddenDensitySize, vocabSize),
+          layerTwoBias(vocabSize, static_cast<double>(0.0)) 
+        {
+            for (auto &value : layerOneWeights.dataElements) { value = randomInitialization(embeddingDensity); }
+            for (auto &value : layerTwoWeights.dataElements) { value = randomInitialization(hiddenDensity); } 
+        }
+
+        // in order to "teach" the AI, it first needs to retain info its been taught/came at
+        // these are aka "intemediate values"
+        // onto forward pass, every layer of passage = forward pass
+        struct ForwardPropogation {
+            std::vector<double> hidden; 
+            std::vector<double> outputLogits;
+            std::vector<double> finalProbabilities;
+        };
+
+        ForwardPropogation runForwardPass(const std::vector<double> &embedding) {
+            ForwardPropogation result;
+
+            result.hidden.resize(hiddenDensity);
+            // result.outputLogits.resize(vocabularySize);
+            // sum = bias + (input * weight)
+            // basic linear transformation for a single neuron in an NN 
+            // using beloved MxMs! (matrix multiplication!) 
+
+            for (size_t inx {0}; inx < hiddenDensity; inx += 1) {
+
+                double accumulateSum1 {layerOneBias[inx]};
+                for (size_t ext {0}; ext < embeddingDensity; ext += 1) {
+                    accumulateSum1 += embedding[ext] * layerOneWeights.getElement(ext, inx);
+                }
+
+                result.hidden[inx] = std::max(0.0, accumulateSum1); // ReLU operation, will skip negative values
+                // this should give us an idea about the active neurons in a pass
+            }
+
+            result.outputLogits.resize(vocabularySize);
+            for (size_t inx {0}; inx < vocabularySize; inx += 1) {
+                
+                double accumulateSum2 {layerTwoBias[inx]};
+                for (size_t ext {0}; ext < hiddenDensity; ext += 1) {
+                    accumulateSum2 += result.hidden[ext] * layerTwoWeights.getElement(ext, inx);
+                } 
+
+                result.outputLogits[inx] = accumulateSum2;
+            }
+
+            // we return the final activation function output as distributed probability
+            result.finalProbabilities = softmax(result.outputLogits);
+            return result;
+        }
+
+        auto singularTrainingStep( // backpropogation + gradient descent
+            const std::vector<double> &inputEmbedding, std::int32_t targetTokenID, double learningRate
+        ) -> void {
+            // s1 - forward pass
+            ForwardPropogation forwardOutput {runForwardPass(inputEmbedding)};
+
+            // s2 - backward pass
+            // we will compute gradients via chain rule
+            // for softmax + cross-entropy,
+            // the gradient becomes gradLoss/gradLogits = predicted probability - oneHot
+
+            // BACKPROPOGATION
+            // suppose it predicted 'x' with 0.8 = 80%
+            // if 'x' was the tokenID/correct, then we get the error (0.8 - 1 = (-0.2)) (need to push it up because its correct)
+            // if it pedicted 'y' at 0.2 = 20%, then the error becomes (0.2 -0 = 0.2) (need to push prob down)
+
+            // s3 - first we calc the error exactly, we backpropogate to hidden layer
+            // chain rule: hidden layer = (outputErr * layerWeightTranspose) * ReLU derivative
+
+            // derivative of the Loss Function with respect to the inputs
+            // why is this so confusing?
+            // partial derivative of loss = d(loss) 
+            // partial derivative of logit/input = d(input)
+            // d(loss)/d(input) = error change "difference" WRT change in raw model output prior to activation
+            // wait, its partial derivative only, right?
+            std::vector<double> outputErrorSignal {forwardOutput.finalProbabilities};
+            outputErrorSignal[targetTokenID] -= (1.0); // cross-entropy dx, subtract 1 from "correct" character's probability
+            std::vector<double> hiddenErrorSignal(hiddenDensity, (0.0));
+
+            // we will propogate the error to the hidden neuron layer
+            for (size_t neuronIndex {0}; neuronIndex < hiddenDensity; neuronIndex += 1) {
+                double errorSum {0.0};
+
+                for (size_t outputIndex {0}; outputIndex < vocabularySize; outputIndex += 1) {
+                    errorSum += layerTwoWeights.getElement(neuronIndex, outputIndex) * outputErrorSignal[outputIndex]; 
+                }
+
+                // we will apply ReLU derivative now to follow chain rule
+                // if the neuron was "negative" (<=0) during forward pass, it gets no blame (error is 0)
+                // if it was positive (>0), it takes the full error
+                double wasNeuronActive {(forwardOutput.hidden[neuronIndex] > 0.0) ? 1.0 : 0.0};
+                hiddenErrorSignal[neuronIndex] = errorSum * wasNeuronActive;
+            }
+
+            // s4 - updating of layer (2) weights and biases = gradient descent
+            for (size_t neuronIndex {0}; neuronIndex < hiddenDensity; neuronIndex += 1) {
+                for (size_t outputIndex {0}; outputIndex < vocabularySize; outputIndex += 1) {
+                    double currentWeight = layerTwoWeights.getElement(neuronIndex, outputIndex);
+                    
+                    // gradient = error * input
+                    // gradient = outputError * hiddenNeuronVal 
+                    double gradient {(outputErrorSignal[outputIndex] * forwardOutput.hidden[neuronIndex])};
+                    layerTwoWeights.getElement(neuronIndex, outputIndex) = (currentWeight - (learningRate * gradient));
+                }
+            }
+
+            // update layer 1 weights and biases
+            for (size_t outputIndex {0}; outputIndex < vocabularySize; outputIndex += 1) {
+                layerTwoBias[outputIndex] -= learningRate * outputErrorSignal[outputIndex];
+            }
+
+            for (size_t inputIndex {0}; inputIndex < embeddingDensity; inputIndex += 1) {
+                for (size_t neuronIndex {0}; neuronIndex < hiddenDensity; neuronIndex += 1) {
+                    double currentWeight = layerOneWeights.getElement(inputIndex, neuronIndex);
+                    
+                    // gradient {hidden Error * input value};
+                    double gradient = hiddenErrorSignal[neuronIndex] * inputEmbedding[inputIndex];
+                    layerOneWeights.getElement(inputIndex, neuronIndex) = (currentWeight - (learningRate * gradient));
+                }
+            }
+
+            for (size_t neuronIndex {0}; neuronIndex < hiddenDensity; neuronIndex += 1) {
+                layerOneBias[neuronIndex] -= learningRate * hiddenErrorSignal[neuronIndex];
+            }
+        }
+};
+
 std::int32_t main(std::int32_t argc, char *argv[]) { 
 
     return static_cast<std::int32_t>(NULL); // just zero 
