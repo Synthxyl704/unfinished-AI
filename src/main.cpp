@@ -345,9 +345,204 @@ class CharacterNeuralNetwork {
                 layerOneBias[neuronIndex] -= learningRate * hiddenErrorSignal[neuronIndex];
             }
         }
+
+        // now we want to generate the next character by predicting text incessantly
+        // this is basially called "autoregression (AR)" or "autoregressive reiteration"
+        // so yeah this model is basically an autoregressive model (AR model)
+        // putting "aris is ga" should return "aris is ga[y]", it will learn on previous character mapped output
+        // also again called as "inference phase" 
+        // inference in autoregression is the process of generating new data points or predictions 
+        // by iteratively applying a "trained" model to its own previous outputs 
+        std::string generateTextSequence(
+            const std::vector<double> &startEmbedding,
+            const std::vector<double> &allEmbeddings,
+            const std::vector<char> &ID2CharacterMap,
+            std::int32_t length
+        ) {
+            std::string generatedText {""};
+            std::vector<double> currentEmbedding {startEmbedding};
+
+            static std::mt19937 PRNGenerator(std::random_device{}());
+            std::uniform_real_distribution<> distributionRange((0.0), (0.1));
+
+            for (size_t step {0}; step < length; step += 1) {
+                ForwardPropogation forwardPassResult {runForwardPass(currentEmbedding)};
+                
+                // stochastic sampling picks the next token based on probability weights
+                // derived from a softmax distribution rather than "greedy decoding" (choosing highest probability)
+                double randomValue {distributionRange(PRNGenerator)};
+                double cumulativeSum {0.0};
+
+                std::int32_t predictedTokenID {0};
+
+                for (std::int32_t inx {0}; inx < vocabularySize; inx += 1) {
+                    cumulativeSum += forwardPassResult.finalProbabilities[inx];
+
+                    if (randomValue <= cumulativeSum) {
+                        predictedTokenID = inx;
+                        break;
+                    }
+                }
+
+                generatedText += ID2CharacterMap[predictedTokenID];
+
+                std::int32_t offset {predictedTokenID * embeddingDensity};
+                currentEmbedding.assign(
+                    allEmbeddings.begin() + offset, allEmbeddings.begin() + offset + embeddingDensity
+                );
+            } 
+            
+            return generatedText;
+        }
 };
 
 std::int32_t main(std::int32_t argc, char *argv[]) { 
+
+    const std::int32_t PROBABILITY_PRECISION_RANGE {5};
+
+    // s1 - (character level) tokenization
+    // the raw ASCII text must be converted into IDs 
+    // the "corpus/corpora" in AI essentially means "training data"
+    // it is a dataset the AI is trained on (very large, in our case, very small
+    std::string corpusText {"hello im isoaris."};
+    std::map<char, std::int32_t> character2ID;
+    std::vector<char> ID2Char;
+
+    for (char singularCharacter : corpusText) {
+        // if the character isnt seen yet, we add it to our vocab 
+        if (character2ID.find(singularCharacter) == character2ID.end()) {
+            character2ID[singularCharacter] = ID2Char.size();
+            ID2Char.push_back(singularCharacter);
+        }
+    }
+
+    std::int32_t vocabularySize {ID2Char.size()};
+
+    std::cout << "vocabulary: [" << vocabularySize << "] tokens." << std::endl;
+    for (char singularChar : ID2Char) { std::cout << "'" << singularChar << "' | "; }
+    std::cout << "\n\n";
+
+    // s2 - hyperparameter configuration
+    // "hyperparameters" control the learning process like the backpropogation
+    // embedding vector - [0.67, -0.69, 0.420 ...]
+    // hidden dimensions will apply non linear transformations using ReLU because they are the hidden neurons
+    
+    std::int32_t embeddingDimensions {8}; 
+    std::int32_t hiddenDimensions {16};
+
+    CharacterNeuralNetwork Network(vocabularySize, embeddingDimensions, hiddenDimensions);
+
+    std::cout << "CNN architecure hyperparameter config:\n";
+    std::cout << "  iinput layer: " << embeddingDimensions << " - embedding vector\n";
+    std::cout << "  hidden layer: " << hiddenDimensions << " - hidden neurons (ReLU activation)\n";
+    std::cout << "  output layer: " << vocabularySize << " - softmax probabilities\n\n";
+
+    std::vector<double> sampleLogits = {2.0, 1.0, 0.67, -0.69};
+    std::cout << "input logits (raw scores): [";
+    for (double singularLogit : sampleLogits) { std::cout << singularLogit << ", "; }
+    std::cout << "]\n"; 
+
+    // s3 - softmax
+    // now, we convert those raw scores/logits into actual probabilities somehow
+    std::vector<double> sampleProbabilities {softmax(sampleLogits)};
+
+    std::cout << "output probabilities: [";
+    // for (double singularProbability : sampleProbabilities) { std::cout << singularProbability << " "; }
+    for (double singularProbability : sampleProbabilities) { 
+        std::cout << std::fixed 
+                  << std::setprecision(PROBABILITY_PRECISION_RANGE)
+                  << singularProbability << " "; 
+    }   std::cout << "]\n";
+
+    std::cout << "sum of probabilities (should be 1.0): "    
+              << std::accumulate(sampleProbabilities.begin(), sampleProbabilities.end(), static_cast<double>(0.0))
+              << "\n" << std::endl;
+
+    // s4 - actual training
+    // we will now teach the model based on the prior corpus
+    // if you remember, we used a std::map which uses KV pairing
+    // that was irrelevant, anyway, we will teach it in the way of (a->r, r->i, i->s)
+
+    // our learningRate will be a scalar controlling step size in gradient descent
+    // double gradient {hiddenErrorSignal[neuronIndex] * inputEmbedding[inputIndex]};
+    // becase during backpropogation, remember that we did: W := W - n * d(W);
+    // layerTwoWeights[...] = currentWeight - (learningRate * gradient);
+    // so the "n" here, will be our learningRate
+
+    // double learningRate {0.5}; // apparently 0.5 is very large and aggressive in our implementation
+    // std::int32_t totalEpochs {100};
+
+    // // we will implement manual input encoding 
+    // std::vector<std::vector<double>> TrainingEmbeddings = {
+    //     {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // 'h'
+    //     {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // 'e'
+    //     {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // 'l'
+    //     {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0}  // 'l'
+    // };
+
+    // for (size_t singularEpoch {0}; singularEpoch < totalEpochs; singularEpoch += 1) {
+    //     // Network.singularTrainingStep(TrainingEmbeddings[0], character2ID['e'], learningRate); // h -> e
+    //     // we dont want this, at least i dont
+    //     // this is called "hardcoded bigram training", its highly unscalable and not data driven as the char values are hardcoded
+    //     // implement dynamic here
+    // }
+
+    // s2 continue
+
+    DenseMatrix embeddings(vocabularySize, embeddingDimensions);
+
+    for (std::int32_t inx {0}; inx < vocabularySize; inx += 1) {
+        for (std::int32_t ext {0}; ext < embeddingDimensions; ext += 1) {
+            embeddings.getElement(inx, ext) = randomInitialization(embeddingDimensions);
+        }
+    }
+
+    // --- 
+
+    struct training { 
+        std::int32_t inputID;
+        std::int32_t targetID;
+    };
+
+    std::vector<training> dataset;
+
+    for (size_t inx {0}; inx < corpusText.size(); inx += 1) {
+        dataset.push_back({
+            character2ID[corpusText[inx]],
+            character2ID[corpusText[inx + 1]]
+        });
+    } std::cout << "\ndataset size: " << dataset.size() << "\n";
+
+    // now the training step
+
+    double learningRate {0.2};
+    std::int32_t totalEpochs {500};
+
+    for (std::int32_t singularEpoch {1}; singularEpoch <= totalEpochs; singularEpoch += 1) {
+        std::shuffle(dataset.begin(), dataset.end(), std::mt19937(std::random_device{}()));
+
+        for (const auto &sample : dataset) {
+            std::vector<double> inputVector(embeddingDimensions);
+            for (std::int32_t singleDataID {0}; singleDataID < embeddingDimensions; singleDataID += 1) {
+                inputVector[singleDataID] = embeddings.getElement(sample.inputID, singleDataID);
+            }
+
+            Network.singularTrainingStep(inputVector, sample.targetID, learningRate);
+        }
+
+        if (singularEpoch % 100 == 0) {
+            std::cout << "Epoch " << singularEpoch << " complete\n"; // this looks bad but whatever
+            learningRate *= 0.9; 
+        }
+    }
+
+    // now we generate the textual o/p
+
+    char startCharacter {corpusText[0]};
+    std::int32_t currentID {character2ID[startCharacter]};
+
+    std::cout << "prompt: \"" << startCharacter << "\n";
+    std::cout << "generated: \"" << startCharacter;
 
     return static_cast<std::int32_t>(NULL); // just zero 
 }
