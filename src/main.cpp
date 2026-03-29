@@ -270,7 +270,7 @@ class CharacterNeuralNetwork {
             return result;
         }
 
-        auto singularTrainingStep( // backpropogation + gradient descent
+        auto singularTrainingStep( // backpropogation + gradient descent (stochastic gradient descent)
             const std::vector<double> &inputEmbedding, std::int32_t targetTokenID, double learningRate
         ) -> void {
             // s1 - forward pass
@@ -404,7 +404,7 @@ std::int32_t main(std::int32_t argc, char *argv[]) {
     // the raw ASCII text must be converted into IDs 
     // the "corpus/corpora" in AI essentially means "training data"
     // it is a dataset the AI is trained on (very large, in our case, very small
-    std::string corpusText {"hello im isoaris."};
+    std::string corpusText {"iso XVNi"};
     std::map<char, std::int32_t> character2ID;
     std::vector<char> ID2Char;
 
@@ -416,7 +416,7 @@ std::int32_t main(std::int32_t argc, char *argv[]) {
         }
     }
 
-    std::int32_t vocabularySize {ID2Char.size()};
+    std::int32_t vocabularySize {static_cast<std::int32_t>(ID2Char.size())};
 
     std::cout << "vocabulary: [" << vocabularySize << "] tokens." << std::endl;
     for (char singularChar : ID2Char) { std::cout << "'" << singularChar << "' | "; }
@@ -433,7 +433,7 @@ std::int32_t main(std::int32_t argc, char *argv[]) {
     CharacterNeuralNetwork Network(vocabularySize, embeddingDimensions, hiddenDimensions);
 
     std::cout << "CNN architecure hyperparameter config:\n";
-    std::cout << "  iinput layer: " << embeddingDimensions << " - embedding vector\n";
+    std::cout << "  -input layer: " << embeddingDimensions << " - embedding vector\n";
     std::cout << "  hidden layer: " << hiddenDimensions << " - hidden neurons (ReLU activation)\n";
     std::cout << "  output layer: " << vocabularySize << " - softmax probabilities\n\n";
 
@@ -447,47 +447,18 @@ std::int32_t main(std::int32_t argc, char *argv[]) {
     std::vector<double> sampleProbabilities {softmax(sampleLogits)};
 
     std::cout << "output probabilities: [";
-    // for (double singularProbability : sampleProbabilities) { std::cout << singularProbability << " "; }
     for (double singularProbability : sampleProbabilities) { 
         std::cout << std::fixed 
                   << std::setprecision(PROBABILITY_PRECISION_RANGE)
                   << singularProbability << " "; 
-    }   std::cout << "]\n";
+    }   
+    std::cout << "]\n";
 
     std::cout << "sum of probabilities (should be 1.0): "    
               << std::accumulate(sampleProbabilities.begin(), sampleProbabilities.end(), static_cast<double>(0.0))
               << "\n" << std::endl;
 
     // s4 - actual training
-    // we will now teach the model based on the prior corpus
-    // if you remember, we used a std::map which uses KV pairing
-    // that was irrelevant, anyway, we will teach it in the way of (a->r, r->i, i->s)
-
-    // our learningRate will be a scalar controlling step size in gradient descent
-    // double gradient {hiddenErrorSignal[neuronIndex] * inputEmbedding[inputIndex]};
-    // becase during backpropogation, remember that we did: W := W - n * d(W);
-    // layerTwoWeights[...] = currentWeight - (learningRate * gradient);
-    // so the "n" here, will be our learningRate
-
-    // double learningRate {0.5}; // apparently 0.5 is very large and aggressive in our implementation
-    // std::int32_t totalEpochs {100};
-
-    // // we will implement manual input encoding 
-    // std::vector<std::vector<double>> TrainingEmbeddings = {
-    //     {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // 'h'
-    //     {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // 'e'
-    //     {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0}, // 'l'
-    //     {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0}  // 'l'
-    // };
-
-    // for (size_t singularEpoch {0}; singularEpoch < totalEpochs; singularEpoch += 1) {
-    //     // Network.singularTrainingStep(TrainingEmbeddings[0], character2ID['e'], learningRate); // h -> e
-    //     // we dont want this, at least i dont
-    //     // this is called "hardcoded bigram training", its highly unscalable and not data driven as the char values are hardcoded
-    //     // implement dynamic here
-    // }
-
-    // s2 continue
 
     DenseMatrix embeddings(vocabularySize, embeddingDimensions);
 
@@ -506,17 +477,18 @@ std::int32_t main(std::int32_t argc, char *argv[]) {
 
     std::vector<training> dataset;
 
-    for (size_t inx {0}; inx < corpusText.size(); inx += 1) {
+    // size_t X1 {corpusText.size() - 1};
+    // size_t X2 {--corpusText.size()}; // why doesnt this work?
+
+    for (size_t inx {0}; inx < corpusText.size() - 1; inx += 1) {
         dataset.push_back({
             character2ID[corpusText[inx]],
             character2ID[corpusText[inx + 1]]
         });
-    } std::cout << "\ndataset size: " << dataset.size() << "\n";
+    } std::cout << "dataset size: " << dataset.size() << "\n";
 
-    // now the training step
-
-    double learningRate {0.2};
-    std::int32_t totalEpochs {500};
+    double learningRate {0.1}; // controls weight update magnitude during backpropagation
+    std::int32_t totalEpochs {1000}; 
 
     for (std::int32_t singularEpoch {1}; singularEpoch <= totalEpochs; singularEpoch += 1) {
         std::shuffle(dataset.begin(), dataset.end(), std::mt19937(std::random_device{}()));
@@ -531,18 +503,41 @@ std::int32_t main(std::int32_t argc, char *argv[]) {
         }
 
         if (singularEpoch % 100 == 0) {
-            std::cout << "Epoch " << singularEpoch << " complete\n"; // this looks bad but whatever
+            std::cout << "Epoch [" << singularEpoch << "] complete\n";
             learningRate *= 0.9; 
         }
     }
 
     // now we generate the textual o/p
-
     char startCharacter {corpusText[0]};
     std::int32_t currentID {character2ID[startCharacter]};
 
-    std::cout << "prompt: \"" << startCharacter << "\n";
+    std::cout << "prompt: \"" << startCharacter << "\"\n";
     std::cout << "generated: \"" << startCharacter;
+
+    std::vector<double> flatEmbeddings;
+    for (double val : embeddings.dataElements) {
+        flatEmbeddings.push_back(val);
+    }
+
+    // --- build starting embedding ---
+    std::vector<double> startEmbedding(embeddingDimensions);
+    std::int32_t offset {currentID * embeddingDimensions};
+
+    for (std::int32_t dataIndex {0}; dataIndex < embeddingDimensions; dataIndex += 1) {
+        startEmbedding[dataIndex] = flatEmbeddings[offset + dataIndex];
+    }
+
+    std::string generatedSequence {
+        Network.generateTextSequence(
+            startEmbedding,
+            flatEmbeddings,
+            ID2Char,
+            20
+        )
+    };
+
+    std::cout << generatedSequence << "\"\n";
 
     return static_cast<std::int32_t>(NULL); // just zero 
 }
